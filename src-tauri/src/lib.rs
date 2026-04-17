@@ -1042,6 +1042,7 @@ pub fn run() {
             commands::check_for_updates,
             commands::is_portable_mode,
             commands::copy_text_to_clipboard,
+            commands::detect_installer_environment,
             commands::get_claude_plugin_status,
             commands::read_claude_plugin_config,
             commands::apply_claude_plugin_config,
@@ -1125,6 +1126,7 @@ pub fn run() {
             commands::get_skill_backups,
             commands::delete_skill_backup,
             commands::install_skill_unified,
+            commands::install_missing_dependencies,
             commands::uninstall_skill_unified,
             commands::restore_skill_backup,
             commands::toggle_skill_app,
@@ -1208,6 +1210,7 @@ pub fn run() {
             commands::delete_sessions,
             commands::launch_session_terminal,
             commands::get_tool_versions,
+            commands::get_manual_install_commands,
             // Provider terminal
             commands::open_provider_terminal,
             // Universal Provider management

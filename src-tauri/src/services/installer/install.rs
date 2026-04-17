@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+use std::process::Command;
+use tauri::{AppHandle, Emitter};
 
 use super::types::{
     InstallerDependencyName, InstallerDependencyState, InstallerDependencyStatus,
@@ -10,6 +12,36 @@ pub struct ManualInstallCommandGroup {
     pub name: InstallerDependencyName,
     pub title: String,
     pub commands: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InstallProgressStage {
+    Queued,
+    Downloading,
+    Installing,
+    Verifying,
+    Completed,
+    Failed,
+    Manual,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallExecutionStep {
+    pub name: InstallerDependencyName,
+    pub stage: InstallProgressStage,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallerRunResult {
+    pub steps: Vec<InstallExecutionStep>,
+    pub completed_dependencies: Vec<InstallerDependencyName>,
+    pub failed_dependencies: Vec<InstallerDependencyName>,
+    pub manual_dependencies: Vec<InstallerDependencyName>,
+    pub status_message: String,
 }
 
 pub fn build_install_plan(
@@ -107,10 +139,168 @@ pub fn get_manual_install_commands(platform: &str) -> Vec<ManualInstallCommandGr
     ]
 }
 
+pub fn normalize_install_result(steps: Vec<InstallExecutionStep>) -> InstallerRunResult {
+    let completed_dependencies = steps
+        .iter()
+        .filter(|step| step.stage == InstallProgressStage::Completed)
+        .map(|step| step.name)
+        .collect();
+    let failed_dependencies = steps
+        .iter()
+        .filter(|step| step.stage == InstallProgressStage::Failed)
+        .map(|step| step.name)
+        .collect();
+    let manual_dependencies = steps
+        .iter()
+        .filter(|step| step.stage == InstallProgressStage::Manual)
+        .map(|step| step.name)
+        .collect();
+
+    InstallerRunResult {
+        steps,
+        completed_dependencies,
+        failed_dependencies,
+        manual_dependencies,
+        status_message: "Installer run completed.".to_string(),
+    }
+}
+
+async fn run_install_command(command: &str, args: &[&str]) -> Result<(), String> {
+    let status = Command::new(command)
+        .args(args)
+        .status()
+        .map_err(|error| error.to_string())?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{command} exited with code {:?}", status.code()))
+    }
+}
+
+async fn install_dependency(
+    dependency: InstallerDependencyName,
+    platform: &str,
+) -> Result<String, String> {
+    match dependency {
+        InstallerDependencyName::Node => match platform {
+            "windows" => Err(
+                "Node MSI flow must be implemented with a downloaded installer package."
+                    .to_string(),
+            ),
+            "macos" | "darwin" => Err(
+                "Node PKG flow must be implemented with a downloaded installer package."
+                    .to_string(),
+            ),
+            _ => Err("Node auto-install is not supported on this platform.".to_string()),
+        },
+        InstallerDependencyName::Git => match platform {
+            "windows" => run_install_command(
+                "winget",
+                &["install", "--id", "Git.Git", "-e", "--source", "winget"],
+            )
+            .await
+            .map(|_| "Installed Git with winget.".to_string()),
+            "macos" | "darwin" => Err("Git requires manual install on macOS.".to_string()),
+            _ => Err("Git auto-install is not supported on this platform.".to_string()),
+        },
+        InstallerDependencyName::Claude => {
+            if platform == "windows" {
+                run_install_command(
+                    "powershell",
+                    &[
+                        "-NoProfile",
+                        "-ExecutionPolicy",
+                        "Bypass",
+                        "-Command",
+                        "irm https://claude.ai/install.ps1 | iex",
+                    ],
+                )
+                .await
+                .map(|_| "Installed Claude Code.".to_string())
+            } else {
+                run_install_command("sh", &["-lc", "curl -fsSL https://claude.ai/install.sh | bash"])
+                    .await
+                    .map(|_| "Installed Claude Code.".to_string())
+            }
+        }
+        InstallerDependencyName::Codex => {
+            run_install_command("npm", &["i", "-g", "@openai/codex@latest"])
+                .await
+                .map(|_| "Installed Codex.".to_string())
+        }
+        InstallerDependencyName::Gemini => {
+            run_install_command("npm", &["i", "-g", "@google/gemini-cli@latest"])
+                .await
+                .map(|_| "Installed Gemini CLI.".to_string())
+        }
+        InstallerDependencyName::Opencode => {
+            if platform == "windows" {
+                Err("OpenCode auto-install is not supported on Windows in v1.".to_string())
+            } else {
+                run_install_command("sh", &["-lc", "curl -fsSL https://opencode.ai/install | bash"])
+                    .await
+                    .map(|_| "Installed OpenCode.".to_string())
+            }
+        }
+        InstallerDependencyName::Npm => {
+            Ok("npm is satisfied by the Node.js installation.".to_string())
+        }
+    }
+}
+
+fn install_stage_from_error(error: &str) -> InstallProgressStage {
+    let lower = error.to_lowercase();
+    if lower.contains("manual") || lower.contains("not supported") {
+        InstallProgressStage::Manual
+    } else {
+        InstallProgressStage::Failed
+    }
+}
+
+fn progress_message(name: InstallerDependencyName) -> String {
+    format!("Preparing {name:?} installation...")
+}
+
+pub async fn install_missing_dependencies(app: &AppHandle) -> Result<InstallerRunResult, String> {
+    let environment = super::detect::detect_installer_environment();
+    let plan = build_install_plan(&environment.dependencies);
+    let platform = std::env::consts::OS;
+    let mut steps = Vec::new();
+
+    for dependency in plan {
+        let queued = InstallExecutionStep {
+            name: dependency,
+            stage: InstallProgressStage::Queued,
+            message: progress_message(dependency),
+        };
+        let _ = app.emit("installer-progress", &queued);
+        steps.push(queued);
+
+        let outcome = install_dependency(dependency, platform).await;
+        let finished = match outcome {
+            Ok(message) => InstallExecutionStep {
+                name: dependency,
+                stage: InstallProgressStage::Completed,
+                message,
+            },
+            Err(error) => InstallExecutionStep {
+                name: dependency,
+                stage: install_stage_from_error(&error),
+                message: error,
+            },
+        };
+        let _ = app.emit("installer-progress", &finished);
+        steps.push(finished);
+    }
+
+    Ok(normalize_install_result(steps))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{build_install_plan, get_manual_install_commands};
-    use crate::services::installer::{
+    use crate::services::installer::types::{
         InstallerDependencyKind, InstallerDependencyName, InstallerDependencyState,
         InstallerDependencyStatus,
     };
@@ -195,5 +385,37 @@ mod tests {
         assert!(commands
             .iter()
             .any(|item| item.name == InstallerDependencyName::Opencode));
+    }
+
+    #[test]
+    fn normalize_install_result_collects_completed_and_failed_dependencies() {
+        let result = super::normalize_install_result(vec![
+            super::InstallExecutionStep {
+                name: InstallerDependencyName::Node,
+                stage: super::InstallProgressStage::Completed,
+                message: "Installed Node.js.".to_string(),
+            },
+            super::InstallExecutionStep {
+                name: InstallerDependencyName::Claude,
+                stage: super::InstallProgressStage::Failed,
+                message: "claude installer exited with code 1".to_string(),
+            },
+            super::InstallExecutionStep {
+                name: InstallerDependencyName::Git,
+                stage: super::InstallProgressStage::Manual,
+                message: "Git requires manual install on macOS.".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            result.completed_dependencies,
+            vec![InstallerDependencyName::Node]
+        );
+        assert_eq!(
+            result.failed_dependencies,
+            vec![InstallerDependencyName::Claude]
+        );
+        assert_eq!(result.manual_dependencies, vec![InstallerDependencyName::Git]);
+        assert_eq!(result.steps.len(), 3);
     }
 }
