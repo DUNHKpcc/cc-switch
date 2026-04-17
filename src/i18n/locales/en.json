@@ -600,6 +600,9 @@
     "viewCurrentReleaseNotes": "View current version release notes",
     "oneClickInstall": "One-click Install",
     "oneClickInstallHint": "Install Claude Code / Codex / Gemini CLI / OpenCode",
+    "installerCenter": "Environment Check & Install",
+    "installerCenterHint": "Detect local dependencies and install supported CLI tools from one place.",
+    "openInstallerCenter": "Environment Check & Install",
     "localEnvCheck": "Local environment check",
     "envBadge": {
       "wsl": "WSL",

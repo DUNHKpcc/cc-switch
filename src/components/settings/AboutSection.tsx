@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Download,
-  Copy,
   ExternalLink,
   Info,
   Loader2,
   RefreshCw,
+  Shield,
   Terminal,
   CheckCircle2,
   AlertCircle,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +29,7 @@ import { Badge } from "@/components/ui/badge";
 import { motion } from "framer-motion";
 import appIcon from "@/assets/icons/app-icon.png";
 import { isWindows } from "@/lib/platform";
+import { InstallerCenterDialog } from "@/components/settings/InstallerCenterDialog";
 
 interface AboutSectionProps {
   isPortable: boolean;
@@ -80,15 +82,6 @@ const ENV_BADGE_CONFIG: Record<
   },
 };
 
-const ONE_CLICK_INSTALL_COMMANDS = `# Claude Code (Native install - recommended)
-curl -fsSL https://claude.ai/install.sh | bash
-# Codex
-npm i -g @openai/codex@latest
-# Gemini CLI
-npm i -g @google/gemini-cli@latest
-# OpenCode
-curl -fsSL https://opencode.ai/install | bash`;
-
 export function AboutSection({ isPortable }: AboutSectionProps) {
   // ... (use hooks as before) ...
   const { t } = useTranslation();
@@ -97,6 +90,7 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [toolVersions, setToolVersions] = useState<ToolVersion[]>([]);
   const [isLoadingTools, setIsLoadingTools] = useState(true);
+  const [installerOpen, setInstallerOpen] = useState(false);
 
   const {
     hasUpdate,
@@ -298,16 +292,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
       toast.error(t("settings.checkUpdateFailed"));
     }
   }, [checkUpdate, hasUpdate, isPortable, resetDismiss, t, updateHandle]);
-
-  const handleCopyInstallCommands = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(ONE_CLICK_INSTALL_COMMANDS);
-      toast.success(t("settings.installCommandsCopied"), { closeButton: true });
-    } catch (error) {
-      console.error("[AboutSection] Failed to copy install commands", error);
-      toast.error(t("settings.installCommandsCopyFailed"));
-    }
-  }, [t]);
 
   const displayVersion = version ?? t("common.unknown");
 
@@ -560,37 +544,50 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
         </div>
       )}
 
-      {!isWindows() && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.3, delay: 0.3 }}
-          className="space-y-3"
-        >
-          <h3 className="text-sm font-medium px-1">
-            {t("settings.oneClickInstall")}
-          </h3>
-          <div className="rounded-xl border border-border bg-gradient-to-br from-card/80 to-card/40 p-4 space-y-3 shadow-sm">
-            <div className="flex items-center justify-between gap-2">
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.3, delay: 0.3 }}
+        className="space-y-3"
+      >
+        <h3 className="px-1 text-sm font-medium">
+          {t("settings.installerCenter", {
+            defaultValue: "Environment Check & Install",
+          })}
+        </h3>
+        <div className="rounded-xl border border-border bg-gradient-to-br from-card/80 to-card/40 p-4 shadow-sm">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Shield className="h-4 w-4 text-primary" />
+                {t("settings.installerCenter", {
+                  defaultValue: "Environment Check & Install",
+                })}
+              </div>
               <p className="text-xs text-muted-foreground">
-                {t("settings.oneClickInstallHint")}
+                {t("settings.installerCenterHint", {
+                  defaultValue:
+                    "Detect local dependencies and install supported CLI tools from one place.",
+                })}
               </p>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={handleCopyInstallCommands}
-                className="h-7 gap-1.5 text-xs"
-              >
-                <Copy className="h-3.5 w-3.5" />
-                {t("common.copy")}
-              </Button>
             </div>
-            <pre className="text-xs font-mono bg-background/80 px-3 py-2.5 rounded-lg border border-border/60 overflow-x-auto">
-              {ONE_CLICK_INSTALL_COMMANDS}
-            </pre>
+            <Button
+              size="sm"
+              className="h-8 gap-1.5 text-xs"
+              onClick={() => setInstallerOpen(true)}
+            >
+              <Wrench className="h-3.5 w-3.5" />
+              {t("settings.openInstallerCenter", {
+                defaultValue: "Environment Check & Install",
+              })}
+            </Button>
           </div>
-        </motion.div>
-      )}
+        </div>
+        <InstallerCenterDialog
+          open={installerOpen}
+          onOpenChange={setInstallerOpen}
+        />
+      </motion.div>
     </motion.section>
   );
 }
